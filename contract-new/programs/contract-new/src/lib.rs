@@ -203,7 +203,8 @@ pub mod contract_new {
             current_usdc_value_in_inr
                 .checked_mul(100)
                 .ok_or(ProgramError::ArithmeticOverflow)?
-                .checked_div(remaining_inrc as u128)?
+                .checked_div(remaining_inrc as u128)
+                .ok_or(ProgramError::ArithmeticOverflow)?
                 .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
                 .ok_or(ProgramError::ArithmeticOverflow)?
         } else {
@@ -262,6 +263,98 @@ pub mod contract_new {
         user_collateral.inrc_minted = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ProgramError::ArithmeticOverflow)?;
             
        Ok(())
+    }
+
+    pub fn liquidate(ctx: Context<Liquidate>, amount_inrc_to_burn: u64) -> Result<()> {
+        let config = & ctx.accounts.config;
+        let user_collateral = &mut ctx.accounts.user_collateral;
+        let liquidator = & ctx.accounts.liquidator;
+        let clock = Clock::get()?;
+
+        let usdc_inr_price = get_pyth_price(&ctx.accounts.usdc_inr_price_feed.to_account_info(), clock.unix_timestamp, MAX_AGE, TARGET_PRICE_DECIMALS)?;
+
+        let usdc_value_in_inr = (user_collateral.usdc_deposit as u128)
+            .checked_mul(usdc_inr_price)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        let health_factor = if user_collateral.inrc_minted > 0 {
+            usdc_value_in_inr
+                .checked_mul(100)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                .checked_div((user_collateral.inrc_minted as u128)
+                    .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
+                    .ok_or(ProgramError::ArithmeticOverflow)?
+                )
+                .ok_or(ProgramError::ArithmeticOverflow)?
+        } else {
+            u128::MAX 
+        };
+
+        if health_factor > config.liquidation_threshold as u128 {
+            return err!(ErrorCode::AboveMinHealthFactor);
+        }
+
+        if amount_inrc_to_burn > user_collateral.inrc_minted {
+            return err!(ErrorCode::LiquidationAmountTooHigh);
+        }
+
+        let usdc_to_liquidator = (amount_inrc_to_burn as u128)
+            .checked_mul(100 + config.liquidation_bonus as u128) //bonus is applied here
+            .ok_or(ProgramError::ArithmeticOverflow)?
+            .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32)) 
+            .ok_or(ProgramError::ArithmeticOverflow)?
+            .checked_div(100) 
+            .ok_or(ProgramError::ArithmeticOverflow)?
+            .checked_div(usdc_inr_price) 
+            .ok_or(ProgramError::ArithmeticOverflow)?
+        as u64;
+
+        if usdc_to_liquidator > user_collateral.usdc_deposit {
+            return err!(ErrorCode::InsufficientCollateralForLiquidation);
+        }
+
+        let burn_accounts = Burn {
+            from: ctx.accounts.liquidator_inrc_account.to_account_info(),
+            mint: ctx.accounts.inrc_mint.to_account_info(),
+            authority: ctx.accounts.liquidator.to_account_info(),
+        };
+
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+
+        token::burn(
+            CpiContext::new(
+                cpi_program.clone(),
+                burn_accounts,
+            ),
+            amount_inrc_to_burn
+        )?;
+
+        let transfer_cpi_account = Transfer {
+            from: ctx.accounts.treasury_usdc_account.to_account_info(),
+            to: ctx.accounts.liquidator_usdc_account.to_account_info(),
+            authority: ctx.accounts.treasury_authority.to_account_info(),
+        };
+
+        let treasury_seeds = &[SEED_TREASURY_AUTHORITY,&[config.treasury_authority_bump]];
+        let signer_seeds = &[&treasury_seeds[..]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                cpi_program,
+                transfer_cpi_account,
+                signer_seeds,
+            ),
+            usdc_to_liquidator
+        )?;
+
+        user_collateral.usdc_deposit = user_collateral.usdc_deposit
+        .checked_sub(usdc_to_liquidator)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        user_collateral.inrc_minted = user_collateral.inrc_minted
+        .checked_sub(amount_inrc_to_burn)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+        Ok(())
     }
 
 #[derive(Accounts)]
@@ -443,8 +536,72 @@ pub struct BurnInrcAndWithdrawUsdc<'info> {
 }
 
 #[derive(Accounts)]
-pub struct Liquidate {
+pub struct Liquidate<'info> {
+    #[account(mut)]
+    pub liquidator: Signer<'info>,
 
+    #[account(
+        mut,
+        seeds = [SEED_CONFIG_ACCOUNT],
+        bump,
+    )]
+    pub config: Account<'info, Config>,
+
+    #[account(
+        mut,
+        seeds = [SEED_MINT_ACCOUNT],
+        bump,
+    )]
+    pub inrc_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        associated_token::mint = inrc_mint,
+        associated_token::authority = liquidator,
+    )]
+    pub liquidator_inrc_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        associated_token::mint = config.usdc_mint,
+        associated_token::authority = liquidator,
+    )]
+    pub liquidator_usdc_account: Account<'info, TokenAccount>,
+
+    /// CHECK: This is a PDA for the mint authority
+    #[account(
+        seeds = [SEED_TREASURY_AUTHORITY],
+        bump = config.treasury_authority_bump,
+    )]
+    pub treasury_authority: AccountInfo<'info>,
+
+    #[account(
+        mut,
+        associated_token::mint = config.usdc_mint,
+        associated_token::authority = treasury_authority,
+    )]
+    pub treasury_usdc_account: Account<'info, TokenAccount>,
+
+    /// CHECK: This is the original depositor to
+    /// be liquidated
+    pub user_to_liquidate: AccountInfo<'info>, 
+
+    #[account(
+        mut,
+        seeds = [SEED_COLLATERAL_ACCOUNT, user_to_liquidate.key().as_ref()], 
+        bump = user_collateral.bump,
+    )]
+    pub user_collateral: Account<'info, UserCollateral>,
+
+    /// CHECK: This is a price feed
+    #[account(
+        address = Pubkey::new_from_array(USDC_INR_FEED_ID_BYTES),
+    )]
+    pub usdc_inr_price_feed: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
 #[account]
