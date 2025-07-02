@@ -60,7 +60,7 @@ fn get_pyth_price(
 
 
 #[program]
-pub mod contract_new {
+pub mod contract_inrc {
     use super::*;
 
     pub fn initialize_config(ctx: Context<InitializeConfig>) -> Result<()> {
