@@ -287,7 +287,7 @@ pub mod contract_new {
             u128::MAX 
         };
 
-        if health_factor > config.liquidation_threshold as u128 {
+        if health_factor >= config.liquidation_threshold as u128 {
             return err!(ErrorCode::AboveMinHealthFactor);
         }
 
@@ -327,7 +327,7 @@ pub mod contract_new {
         )?;
 
         let transfer_cpi_account = Transfer {
-            from: ctx.accounts.treasury_usdc_account.to_account_info(),
+            from: ctx.accounts.treasury_usdc_account.to_account_info(), 
             to: ctx.accounts.liquidator_usdc_account.to_account_info(),
             authority: ctx.accounts.treasury_authority.to_account_info(),
         };
@@ -398,7 +398,6 @@ pub struct DepositUsdcAndMintInrc<'info> {
     #[account(mut)]
     pub signer: Signer<'info>,
     #[account(
-        mut,
         seeds = [SEED_CONFIG_ACCOUNT],
         bump,
     )]
@@ -461,6 +460,7 @@ pub struct DepositUsdcAndMintInrc<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub rent: Sysvar<'info, Rent>,
+    pub clock: Sysvar<'info, Clock>,
 }
 
 #[derive(Accounts)]
@@ -469,7 +469,6 @@ pub struct BurnInrcAndWithdrawUsdc<'info> {
     pub signer: Signer<'info>,
 
     #[account(
-        mut,
         seeds = [SEED_CONFIG_ACCOUNT],
         bump,
     )]
@@ -497,11 +496,9 @@ pub struct BurnInrcAndWithdrawUsdc<'info> {
     pub treasury_authority: AccountInfo<'info>,
 
     #[account(
-        init_if_needed, 
-        payer = signer,
+        mut,
         seeds = [SEED_COLLATERAL_ACCOUNT, signer.key().as_ref()], 
         bump,
-        space = 8 + UserCollateral::INIT_SPACE, 
     )]
     pub user_collateral: Account<'info, UserCollateral>,
 
@@ -538,7 +535,6 @@ pub struct Liquidate<'info> {
     pub liquidator: Signer<'info>,
 
     #[account(
-        mut,
         seeds = [SEED_CONFIG_ACCOUNT],
         bump,
     )]
@@ -599,6 +595,7 @@ pub struct Liquidate<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    pub clock: Sysvar<'info, Clock>,
 }
 
 #[account]
