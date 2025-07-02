@@ -20,4 +20,7 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 [dependencies]
 anchor-spl = "0.31.1"
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+pyth-sdk-solana = "0.10.5" 
+hex = "0.4.3"
+hex-literal = "0.4.1"
 

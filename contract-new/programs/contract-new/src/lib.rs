@@ -1,27 +1,64 @@
 use anchor_lang::prelude::*;
-use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token;
 use anchor_spl::token::Burn;
 use anchor_spl::token::Transfer;
 use anchor_spl::token::{Mint, Token, TokenAccount, MintTo, mint_to};
-
+use pyth_sdk_solana::state::SolanaPriceAccount; // New import for SolanaPriceAccount
+use hex_literal::hex;
 
 pub const LIQUIDATION_BONUS: u64 = 5;
 pub const LIQUIDATION_THRESHOLD: u64 = 150; 
 pub const MINT_DECIMAL: u8 = 6; 
 pub const MIN_HEALTH_FACTOR: u64 = 120; 
 pub const MAX_AGE: u64 = 60; 
-pub const PRICE_FEED_DECIMAL_ADJUSTMENT: u128 = 100_000_000; 
+pub const TARGET_PRICE_DECIMALS: i32 = 8;
+
 
 pub const SEED_CONFIG_ACCOUNT: &[u8] = b"config";
 pub const SEED_MINT_ACCOUNT: &[u8] = b"inrc_mint";
 pub const SEED_TREASURY_AUTHORITY: &[u8] = b"treasury_authority";
 pub const SEED_COLLATERAL_ACCOUNT: &[u8] = b"user_collateral";
 pub const USDC_INR_FEED_ID: &str = "0x2d3a776c7c2e4f014168c07e0b57e7a7f45b7e8d641d4c2b92d6e3f5b7e8d641";
+pub const USDC_INR_FEED_ID_BYTES: [u8; 32] = hex!["2d3a776c7c2e4f014168c07e0b57e7a7f45b7e8d641d4c2b92d6e3f5b7e8d641"];
+
 
 
 declare_id!("FNKmejvZ2Gx3Rjut2MKoqxcz8M8HToMiQnazjDtMcYRY");
+
+fn get_pyth_price(
+    price_account_info: &AccountInfo,
+    current_timestamp: i64,
+    max_age: u64,
+    target_decimals: i32,
+) -> Result<u128> {
+    let price_feed = SolanaPriceAccount::account_info_to_feed(price_account_info)
+        .map_err(|_| ErrorCode::InvalidPrice)?;
+
+    let current_price = price_feed
+        .get_price_no_older_than(current_timestamp, max_age)
+        .ok_or(ErrorCode::InvalidPrice)?;
+    let price_val = current_price.price;
+    let price_expo = current_price.expo;
+
+    let scaled_price: u128;
+    if price_expo < target_decimals {
+        let diff = (target_decimals - price_expo) as u32;
+        scaled_price = (price_val as u128)
+            .checked_mul(10u128.pow(diff))
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+    } else if price_expo > target_decimals {
+        let diff = (price_expo - target_decimals) as u32;
+        scaled_price = (price_val as u128)
+            .checked_div(10u128.pow(diff))
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+    } else {
+        scaled_price = price_val as u128;
+    }
+
+    Ok(scaled_price)
+}
+
 
 #[program]
 pub mod contract_new {
@@ -45,6 +82,7 @@ pub mod contract_new {
     pub fn deposit_usdc_and_mint_inrc(ctx: Context<DepositUsdcAndMintInrc>, amount_usdc: u64) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let user_collateral = &mut ctx.accounts.user_collateral;
+        let clock = Clock::get()?;
         
 
         if amount_usdc == 0 {
@@ -61,30 +99,35 @@ pub mod contract_new {
             return err!(ErrorCode::Unauthorized);
         }
 
-        let usdc_inr_price = 80;
+        let usdc_inr_price = get_pyth_price(&ctx.accounts.usdc_inr_price_feed.to_account_info(), clock.unix_timestamp, MAX_AGE, TARGET_PRICE_DECIMALS)?;
 
         if ctx.accounts.user_usdc_account.amount < amount_usdc {
             return err!(ErrorCode::InsufficientFunds);
         }
         
-        let total_usdc_after_deposit = user_collateral.usdc_deposit + amount_usdc;
+        let total_usdc_after_deposit = user_collateral.usdc_deposit.checked_add(amount_usdc).ok_or(ProgramError::ArithmeticOverflow)?;
 
-        let total_inrc_value_after_deposit = total_usdc_after_deposit
-        .checked_mul(usdc_inr_price)
+        let total_inrc_value_after_deposit = (total_usdc_after_deposit as u128)
+        .checked_mul(usdc_inr_price )
         .ok_or(ProgramError::ArithmeticOverflow)?;
 
-
-        // min health factor here is 120 .One
-        // should have 120% of required usdc for
-        // minting the token
-        let max_inrc_to_mint = total_inrc_value_after_deposit
+    // min health factor here is 120 .One
+    // should have 120% of required usdc for
+    // minting the token
+        let max_inrc_value_in_target_decimals = total_inrc_value_after_deposit
             .checked_mul(100)
             .ok_or(ProgramError::ArithmeticOverflow)?
-            .checked_div(config.min_health_factor)
+            .checked_div(config.min_health_factor as u128)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
+        //making sure the decimals are same
+        let max_inrc_to_mint = max_inrc_value_in_target_decimals
+            .checked_div(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
+            .ok_or(ProgramError::ArithmeticOverflow)?
+            as u64;
+
         let inrc_to_mint = max_inrc_to_mint.
-            checked_sub(user_collateral.inrc_minted)
+            checked_sub(user_collateral.inrc_minted )
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
         //transfer usdc from user to treasury
@@ -138,6 +181,7 @@ pub mod contract_new {
     pub fn burn_inrc_and_withdraw_usdc(ctx: Context<BurnInrcAndWithdrawUsdc>, amount_inrc: u64) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let user_collateral = &mut ctx.accounts.user_collateral;
+        let clock = Clock::get()?;
         
         if amount_inrc == 0 {
             return err!(ErrorCode::InvalidAmount);
@@ -147,11 +191,11 @@ pub mod contract_new {
             return err!(ErrorCode::LiquidationAmountTooHigh);
         }
 
-        let usdc_inr_price = 80;
+        let usdc_inr_price = get_pyth_price(&ctx.accounts.usdc_inr_price_feed.to_account_info(), clock.unix_timestamp, MAX_AGE, TARGET_PRICE_DECIMALS)?;
 
         let remaining_inrc = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ProgramError::ArithmeticOverflow)?;
 
-        let current_usdc_value_in_inr = (user_collateral.usdc_deposit)
+        let current_usdc_value_in_inr = (user_collateral.usdc_deposit as u128)
             .checked_mul(usdc_inr_price)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
@@ -159,21 +203,25 @@ pub mod contract_new {
             current_usdc_value_in_inr
                 .checked_mul(100)
                 .ok_or(ProgramError::ArithmeticOverflow)?
-                .checked_div(remaining_inrc )
+                .checked_div(remaining_inrc as u128)?
+                .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
                 .ok_or(ProgramError::ArithmeticOverflow)?
         } else {
-            u64::MAX 
+            u128::MAX 
         };
 
         //verifying if its above the health factor
         //in which we minted the inrc.. should be 120%
-        if health_factor_after_withdrawal < config.min_health_factor {
+        if health_factor_after_withdrawal < config.min_health_factor as u128 {
             return err!(ErrorCode::BelowMinHealthFactor);
         };
 
-        let usdc_to_withdraw = (amount_inrc)
+        let usdc_to_withdraw = (amount_inrc as u128)
+            .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
+            .ok_or(ProgramError::ArithmeticOverflow)?
             .checked_div(usdc_inr_price)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ProgramError::ArithmeticOverflow)?
+            as u64;
 
 
         let burn_accounts = Burn {
@@ -312,6 +360,12 @@ pub struct DepositUsdcAndMintInrc<'info> {
     )]
     pub user_inrc_account: Account<'info, TokenAccount>,
 
+    /// CHECK: This is a price feed
+     #[account(
+        address = Pubkey::new_from_array(USDC_INR_FEED_ID_BYTES),
+    )]
+    pub usdc_inr_price_feed: AccountInfo<'info>,
+
     pub usdc_mint: Account<'info, Mint>,
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
@@ -375,6 +429,12 @@ pub struct BurnInrcAndWithdrawUsdc<'info> {
     )]
     pub user_inrc_account: Account<'info, TokenAccount>,
 
+    /// CHECK: This is a price feed
+    #[account(
+        address = Pubkey::new_from_array(USDC_INR_FEED_ID_BYTES),
+    )]
+    pub usdc_inr_price_feed: AccountInfo<'info>,
+
     pub usdc_mint: Account<'info, Mint>,
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
@@ -382,6 +442,10 @@ pub struct BurnInrcAndWithdrawUsdc<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
+#[derive(Accounts)]
+pub struct Liquidate {
+
+}
 
 #[account]
 #[derive(InitSpace)]
