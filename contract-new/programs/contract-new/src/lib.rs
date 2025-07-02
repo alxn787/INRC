@@ -24,7 +24,15 @@ pub mod contract_new {
     use super::*;
 
     pub fn initialize_config(ctx: Context<InitializeConfig>) -> Result<()> {
+        ctx.accounts.config.authority = ctx.accounts.signer.key();
+        ctx.accounts.config.inrc_mint = ctx.accounts.inrc_mint.key();
+        ctx.accounts.config.usdc_mint = ctx.accounts.usdc_mint.key();
+        ctx.accounts.config.treasury_authority = ctx.accounts.treasury_authority.key();
+        ctx.accounts.config.bump = ctx.bumps.config;
+        ctx.accounts.config.treasury_authority_bump = ctx.bumps.treasury_authority;
+        ctx.accounts.config.mint_pda_bump = ctx.bumps.inrc_mint;
         msg!("Initializing config");
+        
         Ok(())
     }
 }
@@ -49,11 +57,13 @@ pub struct InitializeConfig<'info> {
         seeds = [SEED_MINT_ACCOUNT],
         bump,
         mint::decimals = MINT_DECIMAL,
-        mint::authority = mint_authority,
-        mint::freeze_authority = mint_authority,
+        mint::authority = treasury_authority ,
+        mint::freeze_authority = treasury_authority,
         mint::token_program = token_program,
     )]
     pub inrc_mint: Account<'info, Mint>,
+
+    pub usdc_mint: Account<'info, Mint>,
 
     /// CHECK: This is a PDA for the mint authority
     #[account(
