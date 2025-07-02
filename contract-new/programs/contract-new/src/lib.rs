@@ -70,6 +70,10 @@ pub mod contract_new {
         .checked_mul(usdc_inr_price)
         .ok_or(ProgramError::ArithmeticOverflow)?;
 
+
+        // min health factor here is 120 .One
+        // should have 120% of required usdc for
+        // minting the token
         let max_inrc_to_mint = total_inrc_value_after_deposit
             .checked_mul(100)
             .ok_or(ProgramError::ArithmeticOverflow)?
@@ -231,6 +235,68 @@ pub struct DepositUsdcAndMintInrc<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
+#[derive(Accounts)]
+pub struct BurnInrcAndWithdrawUsdc<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_CONFIG_ACCOUNT],
+        bump,
+    )]
+    pub config: Account<'info, Config>,
+    
+    #[account(
+        mut,
+        seeds = [SEED_MINT_ACCOUNT],
+        bump,
+    )]
+    pub inrc_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = signer,
+    )]
+    pub user_usdc_account: Account<'info, TokenAccount>,
+
+    /// CHECK: This is a PDA for the mint authority
+    #[account(
+        seeds = [SEED_TREASURY_AUTHORITY],
+        bump = config.treasury_authority_bump,
+    )]
+    pub treasury_authority: AccountInfo<'info>,
+
+    #[account(
+        init_if_needed, 
+        payer = signer,
+        seeds = [SEED_COLLATERAL_ACCOUNT, signer.key().as_ref()], 
+        bump,
+        space = 8 + UserCollateral::INIT_SPACE, 
+    )]
+    pub user_collateral: Account<'info, UserCollateral>,
+
+    #[account(
+        mut,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = treasury_authority,
+    )]
+    pub usdc_treasury_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        associated_token::mint = inrc_mint,
+        associated_token::authority = signer,
+    )]
+    pub user_inrc_account: Account<'info, TokenAccount>,
+
+    pub usdc_mint: Account<'info, Mint>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub rent: Sysvar<'info, Rent>,
+}
 
 
 #[account]
