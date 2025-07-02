@@ -4,7 +4,7 @@ use anchor_spl::token;
 use anchor_spl::token::Burn;
 use anchor_spl::token::Transfer;
 use anchor_spl::token::{Mint, Token, TokenAccount, MintTo, mint_to};
-use pyth_sdk_solana::state::SolanaPriceAccount; // New import for SolanaPriceAccount
+use pyth_sdk_solana::state::SolanaPriceAccount; 
 use hex_literal::hex;
 
 pub const LIQUIDATION_BONUS: u64 = 5;
@@ -19,7 +19,6 @@ pub const SEED_CONFIG_ACCOUNT: &[u8] = b"config";
 pub const SEED_MINT_ACCOUNT: &[u8] = b"inrc_mint";
 pub const SEED_TREASURY_AUTHORITY: &[u8] = b"treasury_authority";
 pub const SEED_COLLATERAL_ACCOUNT: &[u8] = b"user_collateral";
-pub const USDC_INR_FEED_ID: &str = "0x2d3a776c7c2e4f014168c07e0b57e7a7f45b7e8d641d4c2b92d6e3f5b7e8d641";
 pub const USDC_INR_FEED_ID_BYTES: [u8; 32] = hex!["2d3a776c7c2e4f014168c07e0b57e7a7f45b7e8d641d4c2b92d6e3f5b7e8d641"];
 
 
@@ -46,12 +45,12 @@ fn get_pyth_price(
         let diff = (target_decimals - price_expo) as u32;
         scaled_price = (price_val as u128)
             .checked_mul(10u128.pow(diff))
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
     } else if price_expo > target_decimals {
         let diff = (price_expo - target_decimals) as u32;
         scaled_price = (price_val as u128)
             .checked_div(10u128.pow(diff))
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
     } else {
         scaled_price = price_val as u128;
     }
@@ -62,8 +61,6 @@ fn get_pyth_price(
 
 #[program]
 pub mod contract_new {
-    use anchor_spl::token::{self, Transfer};
-
     use super::*;
 
     pub fn initialize_config(ctx: Context<InitializeConfig>) -> Result<()> {
@@ -80,7 +77,7 @@ pub mod contract_new {
     }
 
     pub fn deposit_usdc_and_mint_inrc(ctx: Context<DepositUsdcAndMintInrc>, amount_usdc: u64) -> Result<()> {
-        let config = &mut ctx.accounts.config;
+        let config = & ctx.accounts.config;
         let user_collateral = &mut ctx.accounts.user_collateral;
         let clock = Clock::get()?;
         
@@ -105,30 +102,30 @@ pub mod contract_new {
             return err!(ErrorCode::InsufficientFunds);
         }
         
-        let total_usdc_after_deposit = user_collateral.usdc_deposit.checked_add(amount_usdc).ok_or(ProgramError::ArithmeticOverflow)?;
+        let total_usdc_after_deposit = user_collateral.usdc_deposit.checked_add(amount_usdc).ok_or(ErrorCode::ArithmeticOverflow)?;
 
         let total_inrc_value_after_deposit = (total_usdc_after_deposit as u128)
         .checked_mul(usdc_inr_price )
-        .ok_or(ProgramError::ArithmeticOverflow)?;
+        .ok_or(ErrorCode::ArithmeticOverflow)?;
 
     // min health factor here is 120 .One
     // should have 120% of required usdc for
     // minting the token
         let max_inrc_value_in_target_decimals = total_inrc_value_after_deposit
             .checked_mul(100)
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             .checked_div(config.min_health_factor as u128)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
 
         //making sure the decimals are same
         let max_inrc_to_mint = max_inrc_value_in_target_decimals
             .checked_div(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             as u64;
 
         let inrc_to_mint = max_inrc_to_mint.
             checked_sub(user_collateral.inrc_minted )
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
 
         //transfer usdc from user to treasury
 
@@ -172,14 +169,14 @@ pub mod contract_new {
 
         }
         user_collateral.usdc_deposit = total_usdc_after_deposit;
-        user_collateral.inrc_minted = user_collateral.inrc_minted.checked_add(inrc_to_mint).ok_or(ProgramError::ArithmeticOverflow)?;
+        user_collateral.inrc_minted = user_collateral.inrc_minted.checked_add(inrc_to_mint).ok_or(ErrorCode::ArithmeticOverflow)?;
 
         Ok(())
     }
 }
 
     pub fn burn_inrc_and_withdraw_usdc(ctx: Context<BurnInrcAndWithdrawUsdc>, amount_inrc: u64) -> Result<()> {
-        let config = &mut ctx.accounts.config;
+        let config = & ctx.accounts.config;
         let user_collateral = &mut ctx.accounts.user_collateral;
         let clock = Clock::get()?;
         
@@ -193,20 +190,20 @@ pub mod contract_new {
 
         let usdc_inr_price = get_pyth_price(&ctx.accounts.usdc_inr_price_feed.to_account_info(), clock.unix_timestamp, MAX_AGE, TARGET_PRICE_DECIMALS)?;
 
-        let remaining_inrc = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ProgramError::ArithmeticOverflow)?;
+        let remaining_inrc = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ErrorCode::ArithmeticOverflow)?;
 
         let current_usdc_value_in_inr = (user_collateral.usdc_deposit as u128)
             .checked_mul(usdc_inr_price)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
 
         let health_factor_after_withdrawal = if remaining_inrc > 0 {
             current_usdc_value_in_inr
                 .checked_mul(100)
-                .ok_or(ProgramError::ArithmeticOverflow)?
+                .ok_or(ErrorCode::ArithmeticOverflow)?
                 .checked_div(remaining_inrc as u128)
-                .ok_or(ProgramError::ArithmeticOverflow)?
+                .ok_or(ErrorCode::ArithmeticOverflow)?
                 .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
-                .ok_or(ProgramError::ArithmeticOverflow)?
+                .ok_or(ErrorCode::ArithmeticOverflow)?
         } else {
             u128::MAX 
         };
@@ -219,9 +216,9 @@ pub mod contract_new {
 
         let usdc_to_withdraw = (amount_inrc as u128)
             .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             .checked_div(usdc_inr_price)
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             as u64;
 
 
@@ -259,8 +256,8 @@ pub mod contract_new {
             ),
             usdc_to_withdraw
         )?;
-        user_collateral.usdc_deposit = user_collateral.usdc_deposit.checked_sub(usdc_to_withdraw).ok_or(ProgramError::ArithmeticOverflow)?;
-        user_collateral.inrc_minted = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ProgramError::ArithmeticOverflow)?;
+        user_collateral.usdc_deposit = user_collateral.usdc_deposit.checked_sub(usdc_to_withdraw).ok_or(ErrorCode::ArithmeticOverflow)?;
+        user_collateral.inrc_minted = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ErrorCode::ArithmeticOverflow)?;
             
        Ok(())
     }
@@ -275,17 +272,17 @@ pub mod contract_new {
 
         let usdc_value_in_inr = (user_collateral.usdc_deposit as u128)
             .checked_mul(usdc_inr_price)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
 
         let health_factor = if user_collateral.inrc_minted > 0 {
             usdc_value_in_inr
                 .checked_mul(100)
-                .ok_or(ProgramError::ArithmeticOverflow)?
+                .ok_or(ErrorCode::ArithmeticOverflow)?
                 .checked_div((user_collateral.inrc_minted as u128)
                     .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32))
-                    .ok_or(ProgramError::ArithmeticOverflow)?
+                    .ok_or(ErrorCode::ArithmeticOverflow)?
                 )
-                .ok_or(ProgramError::ArithmeticOverflow)?
+                .ok_or(ErrorCode::ArithmeticOverflow)?
         } else {
             u128::MAX 
         };
@@ -300,13 +297,13 @@ pub mod contract_new {
 
         let usdc_to_liquidator = (amount_inrc_to_burn as u128)
             .checked_mul(100 + config.liquidation_bonus as u128) //bonus is applied here
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             .checked_mul(10u128.pow((TARGET_PRICE_DECIMALS - MINT_DECIMAL as i32) as u32)) 
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             .checked_div(100) 
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
             .checked_div(usdc_inr_price) 
-            .ok_or(ProgramError::ArithmeticOverflow)?
+            .ok_or(ErrorCode::ArithmeticOverflow)?
         as u64;
 
         if usdc_to_liquidator > user_collateral.usdc_deposit {
@@ -349,11 +346,11 @@ pub mod contract_new {
 
         user_collateral.usdc_deposit = user_collateral.usdc_deposit
         .checked_sub(usdc_to_liquidator)
-        .ok_or(ProgramError::ArithmeticOverflow)?;
+        .ok_or(ErrorCode::ArithmeticOverflow)?;
 
         user_collateral.inrc_minted = user_collateral.inrc_minted
         .checked_sub(amount_inrc_to_burn)
-        .ok_or(ProgramError::ArithmeticOverflow)?;
+        .ok_or(ErrorCode::ArithmeticOverflow)?;
         Ok(())
     }
 
