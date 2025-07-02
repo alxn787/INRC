@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{Mint, TokenInterface};
+use anchor_lang::system_program;
+use anchor_spl::token::{Mint, Token, TokenAccount, MintTo, mint_to};
+
 
 pub const LIQUIDATION_BONUS: u64 = 5;
 pub const LIQUIDATION_THRESHOLD: u64 = 150; 
@@ -8,7 +10,6 @@ pub const MIN_HEALTH_FACTOR: u64 = 120;
 pub const MAX_AGE: u64 = 60; 
 pub const PRICE_FEED_DECIMAL_ADJUSTMENT: u128 = 100_000_000; 
 
-// Seeds
 pub const SEED_CONFIG_ACCOUNT: &[u8] = b"config";
 pub const SEED_MINT_ACCOUNT: &[u8] = b"inrc_mint";
 pub const SEED_TREASURY_AUTHORITY: &[u8] = b"treasury_authority";
@@ -52,16 +53,17 @@ pub struct InitializeConfig<'info> {
         mint::freeze_authority = mint_authority,
         mint::token_program = token_program,
     )]
-    pub inrc_mint: InterfaceAccount<'info, Mint>,
+    pub inrc_mint: Account<'info, Mint>,
 
+    /// CHECK: This is a PDA for the mint authority
     #[account(
         seeds = [SEED_TREASURY_AUTHORITY],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub treasury_authority: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
 }
 
 
