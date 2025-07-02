@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{Mint, TokenInterface};
 
 pub const LIQUIDATION_BONUS: u64 = 5;
 pub const LIQUIDATION_THRESHOLD: u64 = 150; 
@@ -40,8 +41,21 @@ pub struct InitializeConfig<'info> {
         space = 8 + Config::INIT_SPACE,
     )]
     pub config: Account<'info, Config>,
-    pub system_program: Program<'info, System>,
 
+    #[account(
+        init,
+        payer = signer,
+        seeds = [SEED_MINT_ACCOUNT],
+        bump,
+        mint::decimals = MINT_DECIMAL,
+        mint::authority = inrc_mint,
+        mint::freeze_authority = inrc_mint,
+        mint::token_program = token_program,
+    )]
+    pub inrc_mint: InterfaceAccount<'info, Mint>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
 
 }
 
