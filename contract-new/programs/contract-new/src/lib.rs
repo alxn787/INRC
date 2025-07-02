@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::token;
+use anchor_spl::token::Burn;
+use anchor_spl::token::Transfer;
 use anchor_spl::token::{Mint, Token, TokenAccount, MintTo, mint_to};
 
 
@@ -131,6 +134,87 @@ pub mod contract_new {
         Ok(())
     }
 }
+
+    pub fn burn_inrc_and_withdraw_usdc(ctx: Context<BurnInrcAndWithdrawUsdc>, amount_inrc: u64) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let user_collateral = &mut ctx.accounts.user_collateral;
+        
+        if amount_inrc == 0 {
+            return err!(ErrorCode::InvalidAmount);
+        }
+        
+        if amount_inrc > user_collateral.inrc_minted {
+            return err!(ErrorCode::LiquidationAmountTooHigh);
+        }
+
+        let usdc_inr_price = 80;
+
+        let remaining_inrc = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ProgramError::ArithmeticOverflow)?;
+
+        let current_usdc_value_in_inr = (user_collateral.usdc_deposit)
+            .checked_mul(usdc_inr_price)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        let health_factor_after_withdrawal = if remaining_inrc > 0 {
+            current_usdc_value_in_inr
+                .checked_mul(100)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                .checked_div(remaining_inrc )
+                .ok_or(ProgramError::ArithmeticOverflow)?
+        } else {
+            u64::MAX 
+        };
+
+        //verifying if its above the health factor
+        //in which we minted the inrc.. should be 120%
+        if health_factor_after_withdrawal < config.min_health_factor {
+            return err!(ErrorCode::BelowMinHealthFactor);
+        };
+
+        let usdc_to_withdraw = (amount_inrc)
+            .checked_div(usdc_inr_price)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+
+        let burn_accounts = Burn {
+            mint: ctx.accounts.inrc_mint.to_account_info(),
+            from: ctx.accounts.user_inrc_account.to_account_info(),
+            authority: ctx.accounts.signer.to_account_info(),
+        };
+
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+
+        token::burn(
+            CpiContext::new(
+                cpi_program.clone(),
+                burn_accounts,
+            ),
+            amount_inrc
+        )?;
+
+        let transfer_cpi_account = Transfer {
+            from: ctx.accounts.usdc_treasury_account.to_account_info(),
+            to: ctx.accounts.user_usdc_account.to_account_info(),
+            authority: ctx.accounts.treasury_authority.to_account_info(),
+        };
+
+        let treasury_seeds = &[SEED_TREASURY_AUTHORITY,&[config.treasury_authority_bump]];
+
+        let signer_seeds = &[&treasury_seeds[..]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                cpi_program,
+                transfer_cpi_account,
+                signer_seeds,
+            ),
+            usdc_to_withdraw
+        )?;
+        user_collateral.usdc_deposit = user_collateral.usdc_deposit.checked_sub(usdc_to_withdraw).ok_or(ProgramError::ArithmeticOverflow)?;
+        user_collateral.inrc_minted = user_collateral.inrc_minted.checked_sub(amount_inrc).ok_or(ProgramError::ArithmeticOverflow)?;
+            
+       Ok(())
+    }
 
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
