@@ -48,15 +48,20 @@ pub struct InitializeConfig<'info> {
         seeds = [SEED_MINT_ACCOUNT],
         bump,
         mint::decimals = MINT_DECIMAL,
-        mint::authority = inrc_mint,
-        mint::freeze_authority = inrc_mint,
+        mint::authority = mint_authority,
+        mint::freeze_authority = mint_authority,
         mint::token_program = token_program,
     )]
     pub inrc_mint: InterfaceAccount<'info, Mint>,
 
+    #[account(
+        seeds = [SEED_TREASURY_AUTHORITY],
+        bump,
+    )]
+    pub mint_authority: AccountInfo<'info>,
+
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
-
 }
 
 
