@@ -1,3 +1,6 @@
+pub mod states;
+pub use states::*;  
+
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token;
@@ -13,8 +16,6 @@ pub const MINT_DECIMAL: u8 = 6;
 pub const MIN_HEALTH_FACTOR: u64 = 120; 
 pub const MAX_AGE: u64 = 60; 
 pub const TARGET_PRICE_DECIMALS: i32 = 8;
-
-
 pub const SEED_CONFIG_ACCOUNT: &[u8] = b"config";
 pub const SEED_MINT_ACCOUNT: &[u8] = b"inrc_mint";
 pub const SEED_TREASURY_AUTHORITY: &[u8] = b"treasury_authority";
@@ -598,29 +599,9 @@ pub struct Liquidate<'info> {
     pub clock: Sysvar<'info, Clock>,
 }
 
-#[account]
-#[derive(InitSpace)]
-pub struct Config {
-    pub authority: Pubkey,
-    pub inrc_mint: Pubkey,
-    pub usdc_mint: Pubkey,
-    pub treasury_authority: Pubkey,
-    pub liquidation_threshold: u64,
-    pub liquidation_bonus: u64,
-    pub min_health_factor: u64,
-    pub bump: u8,
-    pub treasury_authority_bump: u8,
-    pub mint_pda_bump: u8,
-}
 
-#[account]
-#[derive(InitSpace)]
-pub struct UserCollateral {
-    pub depositor: Pubkey,
-    pub usdc_deposit: u64, 
-    pub inrc_minted: u64,
-    pub bump: u8,
-}
+
+
 
 #[error_code]
 pub enum ErrorCode {
