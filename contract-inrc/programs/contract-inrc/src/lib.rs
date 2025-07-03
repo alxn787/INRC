@@ -1,9 +1,12 @@
-pub mod states;
-pub use states::*;
-pub mod context;
-pub use context::*;
 pub mod constant;
+pub mod states;
+pub mod context;
+pub mod error;
+
+pub use states::*;
+pub use context::*;
 pub use constant::*;
+
 
 use anchor_lang::prelude::*;
 use anchor_spl::token;
@@ -14,39 +17,6 @@ use pyth_sdk_solana::state::SolanaPriceAccount;
 
 
 declare_id!("FNKmejvZ2Gx3Rjut2MKoqxcz8M8HToMiQnazjDtMcYRY");
-
-fn get_pyth_price(
-    price_account_info: &AccountInfo,
-    current_timestamp: i64,
-    max_age: u64,
-    target_decimals: i32,
-) -> Result<u128> {
-    let price_feed = SolanaPriceAccount::account_info_to_feed(price_account_info)
-        .map_err(|_| ErrorCode::InvalidPrice)?;
-
-    let current_price = price_feed
-        .get_price_no_older_than(current_timestamp, max_age)
-        .ok_or(ErrorCode::InvalidPrice)?;
-    let price_val = current_price.price;
-    let price_expo = current_price.expo;
-
-    let scaled_price: u128;
-    if price_expo < target_decimals {
-        let diff = (target_decimals - price_expo) as u32;
-        scaled_price = (price_val as u128)
-            .checked_mul(10u128.pow(diff))
-            .ok_or(ErrorCode::ArithmeticOverflow)?;
-    } else if price_expo > target_decimals {
-        let diff = (price_expo - target_decimals) as u32;
-        scaled_price = (price_val as u128)
-            .checked_div(10u128.pow(diff))
-            .ok_or(ErrorCode::ArithmeticOverflow)?;
-    } else {
-        scaled_price = price_val as u128;
-    }
-
-    Ok(scaled_price)
-}
 
 
 #[program]
@@ -163,9 +133,8 @@ pub mod contract_inrc {
 
         Ok(())
     }
-}
 
-    pub fn burn_inrc_and_withdraw_usdc(ctx: Context<BurnInrcAndWithdrawUsdc>, amount_inrc: u64) -> Result<()> {
+     pub fn burn_inrc_and_withdraw_usdc(ctx: Context<BurnInrcAndWithdrawUsdc>, amount_inrc: u64) -> Result<()> {
         let config = & ctx.accounts.config;
         let user_collateral = &mut ctx.accounts.user_collateral;
         let clock = Clock::get()?;
@@ -344,10 +313,41 @@ pub mod contract_inrc {
         Ok(())
     }
 
+}
 
+   
+fn get_pyth_price(
+    price_account_info: &AccountInfo,
+    current_timestamp: i64,
+    max_age: u64,
+    target_decimals: i32,
+    ) -> Result<u128> {
+    let price_feed = SolanaPriceAccount::account_info_to_feed(price_account_info)
+        .map_err(|_| ErrorCode::InvalidPrice)?;
 
+    let current_price = price_feed
+        .get_price_no_older_than(current_timestamp, max_age)
+        .ok_or(ErrorCode::InvalidPrice)?;
+    let price_val = current_price.price;
+    let price_expo = current_price.expo;
 
+    let scaled_price: u128;
+    if price_expo < target_decimals {
+        let diff = (target_decimals - price_expo) as u32;
+        scaled_price = (price_val as u128)
+            .checked_mul(10u128.pow(diff))
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
+    } else if price_expo > target_decimals {
+        let diff = (price_expo - target_decimals) as u32;
+        scaled_price = (price_val as u128)
+            .checked_div(10u128.pow(diff))
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
+    } else {
+        scaled_price = price_val as u128;
+    }
 
+    Ok(scaled_price)
+}
 
 
 #[error_code]
