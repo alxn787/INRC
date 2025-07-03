@@ -1,27 +1,16 @@
 pub mod states;
-pub use states::*;  
+pub use states::*;
+pub mod context;
+pub use context::*;
+pub mod constant;
+pub use constant::*;
 
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token;
 use anchor_spl::token::Burn;
 use anchor_spl::token::Transfer;
-use anchor_spl::token::{Mint, Token, TokenAccount, MintTo, mint_to};
+use anchor_spl::token::{MintTo, mint_to};
 use pyth_sdk_solana::state::SolanaPriceAccount; 
-use hex_literal::hex;
-
-pub const LIQUIDATION_BONUS: u64 = 5;
-pub const LIQUIDATION_THRESHOLD: u64 = 150; 
-pub const MINT_DECIMAL: u8 = 6; 
-pub const MIN_HEALTH_FACTOR: u64 = 120; 
-pub const MAX_AGE: u64 = 60; 
-pub const TARGET_PRICE_DECIMALS: i32 = 8;
-pub const SEED_CONFIG_ACCOUNT: &[u8] = b"config";
-pub const SEED_MINT_ACCOUNT: &[u8] = b"inrc_mint";
-pub const SEED_TREASURY_AUTHORITY: &[u8] = b"treasury_authority";
-pub const SEED_COLLATERAL_ACCOUNT: &[u8] = b"user_collateral";
-pub const USDC_INR_FEED_ID_BYTES: [u8; 32] = hex!["2d3a776c7c2e4f014168c07e0b57e7a7f45b7e8d641d4c2b92d6e3f5b7e8d641"];
-
 
 
 declare_id!("FNKmejvZ2Gx3Rjut2MKoqxcz8M8HToMiQnazjDtMcYRY");
@@ -314,7 +303,7 @@ pub mod contract_inrc {
         let burn_accounts = Burn {
             from: ctx.accounts.liquidator_inrc_account.to_account_info(),
             mint: ctx.accounts.inrc_mint.to_account_info(),
-            authority: ctx.accounts.liquidator.to_account_info(),
+            authority: liquidator.to_account_info(),
         };
 
         let cpi_program = ctx.accounts.token_program.to_account_info();
@@ -355,249 +344,7 @@ pub mod contract_inrc {
         Ok(())
     }
 
-#[derive(Accounts)]
-pub struct InitializeConfig<'info> {
-    #[account(mut)]
-    pub signer: Signer<'info>,
 
-    #[account(
-        init,
-        payer = signer,
-        seeds = [SEED_CONFIG_ACCOUNT],
-        bump,
-        space = 8 + Config::INIT_SPACE,
-    )]
-    pub config: Account<'info, Config>,
-
-    #[account(
-        init,
-        payer = signer,
-        seeds = [SEED_MINT_ACCOUNT],
-        bump,
-        mint::decimals = MINT_DECIMAL,
-        mint::authority = treasury_authority ,
-        mint::freeze_authority = treasury_authority,
-        mint::token_program = token_program,
-    )]
-    pub inrc_mint: Account<'info, Mint>,
-
-    pub usdc_mint: Account<'info, Mint>,
-
-    /// CHECK: This is a PDA for the mint authority
-    #[account(
-        seeds = [SEED_TREASURY_AUTHORITY],
-        bump,
-    )]
-    pub treasury_authority: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct DepositUsdcAndMintInrc<'info> {
-    #[account(mut)]
-    pub signer: Signer<'info>,
-    #[account(
-        seeds = [SEED_CONFIG_ACCOUNT],
-        bump,
-    )]
-    pub config: Account<'info, Config>,
-    
-    #[account(
-        mut,
-        seeds = [SEED_MINT_ACCOUNT],
-        bump,
-    )]
-    pub inrc_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = signer,
-    )]
-    pub user_usdc_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is a PDA for the mint authority
-    #[account(
-        seeds = [SEED_TREASURY_AUTHORITY],
-        bump = config.treasury_authority_bump,
-    )]
-    pub treasury_authority: AccountInfo<'info>,
-
-    #[account(
-        init_if_needed, 
-        payer = signer,
-        seeds = [SEED_COLLATERAL_ACCOUNT, signer.key().as_ref()], 
-        bump,
-        space = 8 + UserCollateral::INIT_SPACE, 
-    )]
-    pub user_collateral: Account<'info, UserCollateral>,
-
-    #[account(
-        init_if_needed,
-        payer = signer,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = treasury_authority,
-    )]
-    pub usdc_treasury_account: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = signer,
-        associated_token::mint = inrc_mint,
-        associated_token::authority = signer,
-    )]
-    pub user_inrc_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is a price feed
-     #[account(
-        address = Pubkey::new_from_array(USDC_INR_FEED_ID_BYTES),
-    )]
-    pub usdc_inr_price_feed: AccountInfo<'info>,
-
-    pub usdc_mint: Account<'info, Mint>,
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub rent: Sysvar<'info, Rent>,
-    pub clock: Sysvar<'info, Clock>,
-}
-
-#[derive(Accounts)]
-pub struct BurnInrcAndWithdrawUsdc<'info> {
-    #[account(mut)]
-    pub signer: Signer<'info>,
-
-    #[account(
-        seeds = [SEED_CONFIG_ACCOUNT],
-        bump,
-    )]
-    pub config: Account<'info, Config>,
-    
-    #[account(
-        mut,
-        seeds = [SEED_MINT_ACCOUNT],
-        bump,
-    )]
-    pub inrc_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = signer,
-    )]
-    pub user_usdc_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is a PDA for the mint authority
-    #[account(
-        seeds = [SEED_TREASURY_AUTHORITY],
-        bump = config.treasury_authority_bump,
-    )]
-    pub treasury_authority: AccountInfo<'info>,
-
-    #[account(
-        mut,
-        seeds = [SEED_COLLATERAL_ACCOUNT, signer.key().as_ref()], 
-        bump,
-    )]
-    pub user_collateral: Account<'info, UserCollateral>,
-
-    #[account(
-        mut,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = treasury_authority,
-    )]
-    pub usdc_treasury_account: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        associated_token::mint = inrc_mint,
-        associated_token::authority = signer,
-    )]
-    pub user_inrc_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is a price feed
-    #[account(
-        address = Pubkey::new_from_array(USDC_INR_FEED_ID_BYTES),
-    )]
-    pub usdc_inr_price_feed: AccountInfo<'info>,
-
-    pub usdc_mint: Account<'info, Mint>,
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub rent: Sysvar<'info, Rent>,
-}
-
-#[derive(Accounts)]
-pub struct Liquidate<'info> {
-    #[account(mut)]
-    pub liquidator: Signer<'info>,
-
-    #[account(
-        seeds = [SEED_CONFIG_ACCOUNT],
-        bump,
-    )]
-    pub config: Account<'info, Config>,
-
-    #[account(
-        mut,
-        seeds = [SEED_MINT_ACCOUNT],
-        bump,
-    )]
-    pub inrc_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        associated_token::mint = inrc_mint,
-        associated_token::authority = liquidator,
-    )]
-    pub liquidator_inrc_account: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        associated_token::mint = config.usdc_mint,
-        associated_token::authority = liquidator,
-    )]
-    pub liquidator_usdc_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is a PDA for the mint authority
-    #[account(
-        seeds = [SEED_TREASURY_AUTHORITY],
-        bump = config.treasury_authority_bump,
-    )]
-    pub treasury_authority: AccountInfo<'info>,
-
-    #[account(
-        mut,
-        associated_token::mint = config.usdc_mint,
-        associated_token::authority = treasury_authority,
-    )]
-    pub treasury_usdc_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is the original depositor to
-    /// be liquidated
-    pub user_to_liquidate: AccountInfo<'info>, 
-
-    #[account(
-        mut,
-        seeds = [SEED_COLLATERAL_ACCOUNT, user_to_liquidate.key().as_ref()], 
-        bump = user_collateral.bump,
-    )]
-    pub user_collateral: Account<'info, UserCollateral>,
-
-    /// CHECK: This is a price feed
-    #[account(
-        address = Pubkey::new_from_array(USDC_INR_FEED_ID_BYTES),
-    )]
-    pub usdc_inr_price_feed: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub clock: Sysvar<'info, Clock>,
-}
 
 
 
