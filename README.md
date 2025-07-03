@@ -7,7 +7,6 @@ Decentralized CDP Protocol on Solana A decentralized borrowing protocol built on
 
 ## Prerequisites
 
-Install my-project with npm
 
 ```bash
 Rust: Install Rust
